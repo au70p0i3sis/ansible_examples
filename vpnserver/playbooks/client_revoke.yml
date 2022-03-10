@@ -1,0 +1,51 @@
+---
+- name: Revoking client  
+  hosts:  vpnserver 
+  remote_user: vpnadmin
+  vars:
+    easyrsa_dir: "{{ansible_env.HOME}}/easy-rsa"
+
+  tasks:
+  - name: Check if client exists
+    stat:
+      path: "{{easyrsa_dir}}/pki/issued/{{client_name}}.crt"
+    register: clientstat
+  - fail: 
+      msg: "Cannot find client: {{client_name}}"
+    when:
+      clientstat.stat.exists != true
+
+  - name: Revoke Certificate
+    shell: >
+      ./easyrsa revoke {{client_name}}
+    args:
+      stdin: "yes"
+      chdir: "{{easyrsa_dir}}"
+
+  - name: Create Certificate Revocation List
+    shell: > 
+      ./easyrsa gen-crl
+    args:
+      stdin: 'yes'
+      chdir: "{{easyrsa_dir}}"
+
+  - name: Copy CRL to /usr/share/openvpn/
+    become: true
+    copy: 
+      remote_src: yes
+      src: "{{easyrsa_dir}}/pki/crl.pem"
+      dest: /usr/share/openvpn/
+      force: yes
+      mode: '0644'
+
+  - name: Restart Openvpn Server
+    become: true
+    systemd:
+      name: openvpn@server.service
+      state: restarted
+      enabled: yes
+
+  - name: Remove client-config
+    file: 
+      path: "{{ansible_env.HOME}}/client-confs/{{client_name}}.ovpn"
+      state: absent

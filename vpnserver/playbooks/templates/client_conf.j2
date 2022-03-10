@@ -1,0 +1,23 @@
+client
+dev tun
+proto udp
+remote {{inventory_hostname}} 1194
+resolv-retry infinite
+nobind
+
+# Downgrade privileges after initialization (non-Windows only)
+user nobody
+group nobody
+
+# Try to preserve some state across restarts.
+persist-key
+persist-tun
+
+# SSL/TLS parms.
+remote-cert-tls server
+auth SHA256
+key-direction 1
+cipher AES-256-GCM
+
+# Set log file verbosity.
+verb 3

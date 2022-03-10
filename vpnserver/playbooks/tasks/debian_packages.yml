@@ -1,0 +1,13 @@
+--- 
+# packages for debian OpenVPN server
+  - name: Update all packages via apt
+    become: true
+    apt:
+      name: '*'
+  - name: Install openvpn and easy-rsa
+    become: true
+    apt: 
+    name:
+      - openvpn
+      - easy-rsa
+

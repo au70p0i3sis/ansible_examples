@@ -1,0 +1,62 @@
+--- 
+- name: Create VPN client for client name {{client_name}}
+  hosts: vpnserver
+  remote_user: vpnadmin
+  vars:
+    easyrsa_dir: "{{ ansible_env.HOME }}/easy-rsa"
+    conf_dir: "{{ ansible_env.HOME }}/client-confs"
+    target_conf: "{{conf_dir}}/{{client_name}}.ovpn"
+
+  tasks:
+  - name: Create directory to hold client configs
+    file:
+      path: "{{conf_dir}}"
+      state: directory
+      mode: '0750'
+
+  - name: Test for duplicate client name
+    stat: 
+      path: "{{target_conf}}"
+    register: fstat
+  - fail:
+      msg: "Client name of {{client_name}} already exists. 
+              Pick another name or revoke the client's certs with playbook revoke.yml"
+    when: fstat.stat.exists == true
+
+  - name: Build client key and certificate
+    shell: ./easyrsa build-client-full {{client_name}} nopass
+    args:
+      chdir: "{{easyrsa_dir}}"
+
+  # grab template
+  - name: Create base config from template
+    template:
+      src: templates/client_conf.j2
+      dest: "{{target_conf}}"
+      owner: vpnadmin
+      mode: '0640'
+
+  - name: Copy keys into client configuration
+    raw: >
+      echo "<ca>" >> {{target_conf}};
+      cat {{easyrsa_dir}}/pki/ca.crt >> {{target_conf}};
+      echo -e "</ca>\n<cert>" >> {{target_conf}};
+      cat {{easyrsa_dir}}/pki/issued/{{client_name}}.crt >> {{target_conf}};
+      echo -e "</cert>\n<key>" >> {{target_conf}};
+      cat {{easyrsa_dir}}/pki/private/{{client_name}}.key >> {{target_conf}};
+      echo -e "</key>\n<tls-crypt>" >> {{target_conf}};
+      cat {{easyrsa_dir}}/pki/ta.key >> {{target_conf}};
+      echo -e "</tls-crypt>" >> {{target_conf}};
+
+  - name: Fetch new client config and store locally 
+    fetch:
+      src: "{{target_conf}}"
+      dest: "../clientconfs/{{client_name}}.ovpn"
+      validate_checksum: yes
+      flat: yes
+
+- name: Print client config file location
+  hosts: localhost
+  tasks:
+  - debug:
+      msg: "Downloaded key to file {{playbook_dir}}../clientconfs/{{client_name}}.ovpn"

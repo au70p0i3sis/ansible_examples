@@ -1,0 +1,210 @@
+---
+- name: Setting up vpnserver
+  hosts:  vpnserver
+  remote_user: vpnadmin
+  vars:
+    easyrsa_dir: "{{ansible_env.HOME}}/easy-rsa"
+
+  tasks:
+  - name: Update all packages
+    become: true
+    package: 
+      name: '*'
+      state: latest
+
+  - name: Enable EPEL repo if on CentOS
+    become: true
+    yum:
+      name: epel-release
+      state: present
+    when: ansible_distribution == "CentOS"
+
+  - name: Install openvpn and easy-rsa
+    become: true
+    package:
+      name: 
+        - openvpn
+        - easy-rsa
+      state: present
+
+  - name: Create easy-rsa directory
+    file:
+      path: "{{easyrsa_dir}}"
+      state: directory
+      mode: '0750'
+
+  - name: Copy easyrsa into new directory (CentOS)
+    copy: 
+      remote_src: yes
+      src: "/usr/share/easy-rsa/3/"
+      dest: "{{easyrsa_dir}}"
+    when: ansible_distribution == "CentOS"
+
+  - name: Copy easyrsa into new directory (Debian)
+    copy: 
+      remote_src: yes
+      src: "/usr/share/easy-rsa/"
+      dest: "{{easyrsa_dir}}"
+    when: ansible_distribution == "Debian"
+
+  - name: Set executable bit on easyrsa
+    file: 
+      path: "{{easyrsa_dir}}/easyrsa"
+      mode: '740'
+
+  - name: Initialize Public Key Infra
+    shell: ./easyrsa init-pki
+    args:
+      chdir: "{{easyrsa_dir}}"
+      creates: "{{easyrsa_dir}}/pki"
+
+  - name: Create Certificate Authority 
+    shell: >
+      ./easyrsa --dn-mode=cn_only build-ca nopass
+    args:
+      stdin: "{{inventory_hostname}}" 
+      chdir: "{{easyrsa_dir}}/"
+      creates: "{{easyrsa_dir}}/pki/ca.crt"
+
+  - name: Build server certificate and key
+    shell: >
+      ./easyrsa build-server-full {{inventory_hostname}} nopass
+    args: 
+      chdir: "{{easyrsa_dir}}"
+      creates: "{{easyrsa_dir}}/pki/issued/{{inventory_hostname}}.crt"
+
+  - name: Generate Diffie-Hellman params
+    shell: >
+      ./easyrsa gen-dh
+    args:
+      chdir: "{{easyrsa_dir}}"
+      creates: "{{easyrsa_dir}}/pki/dh.pem"
+
+  - name: Build openvpn secret key
+    command: /usr/sbin/openvpn --genkey --secret ta.key
+    args:
+      chdir: "{{easyrsa_dir}}/pki"
+      creates: "{{easyrsa_dir}}/pki/ta.key"
+
+  - name: Copy keys into openvpn server directory
+    become: true
+    copy:
+      remote_src: yes
+      src: "{{easyrsa_dir}}/pki/{{ item }}"
+      dest: /etc/openvpn/
+      mode: '0600'
+    with_items:
+      - "ta.key"
+      - "dh.pem"
+      - "ca.crt"
+      - "issued/{{inventory_hostname}}.crt"
+      - "private/{{inventory_hostname}}.key"
+
+  # Configure Certificate Revocation List
+  - name: Create directory to hold Certificate Revocation List
+    become: true
+    file:
+      path: "/usr/share/openvpn"
+      state: directory
+      owner: root
+      group: root
+      mode: '0751'
+  - name: Create Certificate Revocation List
+    shell: > 
+      ./easyrsa gen-crl
+    args:
+      stdin: 'yes'
+      chdir: "{{easyrsa_dir}}"
+  - name: Copy CRL
+    become: true
+    copy: 
+      remote_src: yes
+      src: "{{easyrsa_dir}}/pki/crl.pem"
+      dest: /usr/share/openvpn/
+      force: yes
+      mode: '0644'
+
+  ######
+  # Create OpenVPN config
+  ######
+  - name: Get path
+    raw: >
+      if [[ {{ansible_distribution}} == "Debian" ]];  
+        then pth=$(dpkg -L openvpn | grep -E '^/usr/share/doc/.+/server.conf(.gz)*$');
+        else pth=$(rpm -ql openvpn | grep -E '^/usr/share/doc/.+/server.conf(.gz)*$');
+      fi;
+      echo -n "$pth"
+    register: serverconf_path
+
+  - name: save config file extension in registed variable
+    raw: >
+      fname=$(basename {{serverconf_path.stdout}});
+      echo -n "${fname##*.}";
+    register: extension
+
+  - name: Create openvpn config from sample
+    become: true
+    copy: 
+      remote_src: yes
+      src: "{{serverconf_path.stdout}}"
+      dest: /etc/openvpn/
+    when: extension.stdout == "conf"
+
+  - name: Decompress sample openvpn config file if needed 
+    become: true
+    shell: >
+      gzip -d -c {{serverconf_path.stdout}} | tee /etc/openvpn/server.conf > /dev/null
+    when: extension.stdout == "gz"
+
+  - name: Register variable for either the group 'nobody' or 'nogroup'
+    raw: >
+      r=$(getent group {nogroup,nobody} | cut -d':' -f1);
+      echo -n "$r"
+    register: nobody_group
+
+  - name: Edit openvpn server conf
+    become: true
+    lineinfile:
+      dest: "/etc/openvpn/server.conf"
+      regexp: "{{ item.FROM }}"
+      line: "{{ item.TO }}"
+    with_items:
+      - { FROM: '^key server.key', TO: 'key {{inventory_hostname}}.key' }
+      - { FROM: '^cert server.crt', TO: 'cert {{inventory_hostname}}.crt' }
+      - { FROM: '^dh dh2048.pem', TO: 'dh none' }
+      - { FROM: '^tls-auth ta.key 0', TO: 'tls-crypt ta.key' }
+      - { FROM: '^cipher AES-256-CBC', TO: 'cipher AES-256-GCM' }
+      - { FROM: '^;user nobody', TO: 'user nobody' }
+      - { FROM: '^;group no', TO: 'group {{nobody_group.stdout}}' }
+      - { FROM: 'crl-verify', TO: 'crl-verify /usr/share/openvpn/crl.pem' }
+        # uncomment next line to have vpn clients push all traffic through vpn
+      #- { FROM: ';push "redirect-gateway def1 bypass-dhcp"', TO: 'push "redirect-gateway def1 bypass-dhcp"' }
+        # uncomment next two lines to have vpn set DNS on the client
+      #- { FROM: '^;push "dhcp-option DNS "', TO: 'push "dhcp-option DNS 1.1.1.1."' }
+      #- { FROM: '^;push "dhcp-option DNS "', TO: 'push "dhcp-option DNS 1.0.0.1."' }
+
+  #####
+  # configure firewall and ip routing
+  #####
+  - name: Allow IP forwarding
+    become: true
+    sysctl:
+      name: net.ipv4.ip_forward
+      value: 1
+      state: present
+
+  - name: Setup Centos Firewall
+    include: tasks/centos_firewall.yml
+    when: ansible_distribution == "CentOS"
+
+  - name: Setup Debian Firewall
+    include: tasks/debian_firewall.yml
+    when: ansible_distribution == "Debian"
+
+
+  - name: Start openvpn service
+    become: true
+    systemd:
+      name: openvpn@server.service
+      state: started
+      enabled: yes

@@ -1,0 +1,31 @@
+- name: Ensure Ufw is installed
+  become: true
+  apt:
+    name: ufw
+    state: present
+
+- name: Create UFW Before rules
+  become: true
+  template: 
+    src: templates/ufw_before.j2
+    dest: /etc/ufw/before.rules
+    owner: root
+    mode: '0640'
+
+- name: Set Forward Policy
+  become: true
+  lineinfile:
+    dest: "/etc/default/ufw"
+    regexp: "DEFAULT_FORWARD_POLICY"
+    line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
+
+- name: Enable ufw with ssh and openvpn rules allowed
+  become: true
+  ufw: 
+    rule: allow
+    name: ssh
+    state: enabled
+  ufw: 
+    rule: allow
+    port: 1194
+    proto: udp

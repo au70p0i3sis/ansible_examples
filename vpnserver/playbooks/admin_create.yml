@@ -1,0 +1,41 @@
+---
+- name: Create vpnadmin account
+  hosts: vpnserver
+  remote_user: root
+  tasks:
+
+    - name: Ensure hash has been passes as variable
+      fail: 
+        msg: 
+          'Hashed password has not been provided as variable. 
+          To create a password hash run: mkpasswd --method=sha-512
+          and pass the result to this playbook with --extra-vars "hash=<hash>"'
+
+    - name: Ensure wheel group is present 
+      group:
+        name: wheel
+        state: present
+
+    - name: Allow wheel group to run sudo commands
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        regexp: '^%wheel'
+        line: '%wheel ALL=(ALL)   ALL'
+        validate: /usr/sbin/visudo -cf %s
+
+    # note: to create password hash use 'mkpasswd --method=sha-512'
+    - name: Add vpnadmin to wheel group
+      user: 
+        name: vpnadmin
+        password: {{hash}}
+        create_home: yes
+        shell: /bin/bash
+        group: wheel
+        append: yes
+
+    - name: add ssh key
+      authorized_key:
+        user: 'vpnadmin'
+        key: "{{ lookup('file', item) }}"
+      with_fileglob: ../keys/*.pub
