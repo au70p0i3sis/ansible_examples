@@ -48,13 +48,13 @@ To enable the vpn server to set the client's dns, uncomment lines 183-184 and re
 To create a client config file and store it locally in the the ./clientconfs/ directory
 (Replace ```<client>``` with intended client name):
 
-```ansible-playbook -K -i hosts playbook/client_create.yml --extra-vars "client_name=<client>"```
+```ansible-playbook -K -i hosts playbooks/client_create.yml --extra-vars "client_name=<client>"```
 
  
 This can now be run on the client as:
  ```openvpn --config <config>```
 
 # Revoking client certificates
-```ansible-playbook -K -i hosts playbook/client_revoke.yml --extra-vars "client_name=<client>"```
+```ansible-playbook -K -i hosts playbooks/client_revoke.yml --extra-vars "client_name=<client>"```
 
 Once revoked, the client will lose connection and the generated client config will no longer successfully authenticate.
